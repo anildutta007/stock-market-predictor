@@ -7,24 +7,24 @@ US & UK Key Indices:
 - FTSE 100 (^FTSE)
 """
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 import math
 import os
 import threading
 import time
 import urllib.request
-from http.server import HTTPServer, SimpleHTTPRequestHandler
 import urllib.parse
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
 PORT = 8085
 
-# Static constituent lists and normalized market weights for top movers
 INDEX_CONFIGS = {
     "NASDAQ": {
         "name": "NASDAQ 100",
         "symbol": "^NDX",
         "currency": "$",
-        "ladder_step_pct": 0.15,  # 0.15% per progression ladder step
+        "ladder_step_pct": 0.15,
         "constituents": [
             {"symbol": "NVDA", "name": "Nvidia Corp", "weight": 9.40},
             {"symbol": "AAPL", "name": "Apple Inc", "weight": 8.75},
@@ -108,49 +108,42 @@ INDEX_CONFIGS = {
     }
 }
 
-DATA_CACHE = {}
-LAST_FETCH = {}
-CACHE_TTL = 15  # seconds
+CACHE = {}
+CACHE_LOCK = threading.Lock()
+CACHE_TTL = 10  # 10s caching for ultra-responsive UI
 
 def fetch_chart(symbol):
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(symbol)}?interval=5m&range=5d"
+    with CACHE_LOCK:
+        if symbol in CACHE:
+            entry = CACHE[symbol]
+            if time.time() - entry["ts"] < CACHE_TTL:
+                return entry["data"]
+
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(symbol)}?interval=1d&range=5d"
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'
     }
     req = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=6) as response:
+        with urllib.request.urlopen(req, timeout=3.5) as response:
             data = json.loads(response.read().decode('utf-8'))
-            return data['chart']['result'][0]
-    except Exception as e:
-        # Fallback 1-day range if 5-day is not available or rate limited
-        try:
-            url_fallback = f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(symbol)}?interval=1d&range=1y"
-            req2 = urllib.request.Request(url_fallback, headers=headers)
-            with urllib.request.urlopen(req2, timeout=6) as resp:
-                data2 = json.loads(resp.read().decode('utf-8'))
-                return data2['chart']['result'][0]
-        except Exception as e2:
-            return None
+            res = data['chart']['result'][0]
+            with CACHE_LOCK:
+                CACHE[symbol] = {"ts": time.time(), "data": res}
+            return res
+    except Exception:
+        # Check if we have stale cached data
+        with CACHE_LOCK:
+            if symbol in CACHE:
+                return CACHE[symbol]["data"]
+        return None
 
 def analyze_index(index_key):
     cfg = INDEX_CONFIGS.get(index_key, INDEX_CONFIGS["NASDAQ"])
-    now = time.time()
     
-    # Fetch Index data
+    # 1. Fetch index data
     idx_raw = fetch_chart(cfg["symbol"])
-    if not idx_raw:
-        # Generate simulated active quote if network throttle
-        idx_meta = {
-            "regularMarketPrice": 29420.0,
-            "chartPreviousClose": 29380.0,
-            "regularMarketDayHigh": 29480.0,
-            "regularMarketDayLow": 29360.0,
-            "fiftyTwoWeekHigh": 30500.0,
-            "fiftyTwoWeekLow": 21000.0
-        }
-    else:
-        idx_meta = idx_raw.get('meta', {})
+    idx_meta = idx_raw.get('meta', {}) if idx_raw else {}
 
     current_idx_price = idx_meta.get('regularMarketPrice') or idx_meta.get('previousClose') or 29400.0
     prev_close = idx_meta.get('chartPreviousClose') or idx_meta.get('previousClose') or current_idx_price
@@ -161,18 +154,28 @@ def analyze_index(index_key):
     idx_chg_pts = current_idx_price - prev_close
     idx_chg_pct = (idx_chg_pts / prev_close) * 100 if prev_close else 0.0
 
-    # Constituent analysis
+    # 2. Parallel fetch constituents
+    symbols = [c["symbol"] for c in cfg["constituents"]]
+    raw_dict = {}
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {executor.submit(fetch_chart, sym): sym for sym in symbols}
+        for future in futures:
+            sym = futures[future]
+            try:
+                raw_dict[sym] = future.result()
+            except Exception:
+                raw_dict[sym] = None
+
     constituent_results = []
     total_net_points_attributed = 0.0
     bullish_weight = 0.0
     bearish_weight = 0.0
     neutral_weight = 0.0
-    vol_surge_count = 0
 
     for c in cfg["constituents"]:
         sym = c["symbol"]
         weight = c["weight"]
-        raw = fetch_chart(sym)
+        raw = raw_dict.get(sym)
         if raw and 'meta' in raw:
             meta = raw['meta']
             curr_price = meta.get('regularMarketPrice', 0.0)
@@ -181,38 +184,32 @@ def analyze_index(index_key):
             stock_day_low = meta.get('regularMarketDayLow', curr_price)
             stock_52_high = meta.get('fiftyTwoWeekHigh', curr_price * 1.15)
             stock_52_low = meta.get('fiftyTwoWeekLow', curr_price * 0.8)
-            vol = meta.get('regularMarketVolume', 0)
         else:
-            # Fallback realistic proxy based on index movement
             curr_price = 150.0
             stock_prev_close = 149.0
             stock_day_high = 152.0
             stock_day_low = 148.5
             stock_52_high = 180.0
             stock_52_low = 110.0
-            vol = 1200000
 
-        # Calculations
         pct_change = ((curr_price - stock_prev_close) / stock_prev_close * 100) if stock_prev_close else 0.0
         
         # Point impact formula: (weight / 100) * (% stock change / 100) * base index price
         point_impact = (weight / 100.0) * (pct_change / 100.0) * current_idx_price
         total_net_points_attributed += point_impact
 
-        # Range position (0 to 1)
+        # Day Range position (0 to 100)
         prev_range_span = (stock_day_high - stock_day_low) if stock_day_high > stock_day_low else (curr_price * 0.01)
         range_pos = max(0.0, min(1.0, (curr_price - stock_day_low) / prev_range_span)) if prev_range_span > 0 else 0.5
         
-        # 52-week position
+        # 52-week position (0 to 100)
         span_52 = (stock_52_high - stock_52_low) if stock_52_high > stock_52_low else (curr_price * 0.1)
         pos_52 = max(0.0, min(1.0, (curr_price - stock_52_low) / span_52)) if span_52 > 0 else 0.5
 
-        # Volume / Momentum signal
         if pct_change >= 0.3:
             stance = "Strong Bullish"
             signal = "BUY ON DIP / RIDE"
             bullish_weight += weight
-            vol_surge_count += 1
         elif pct_change > 0.0:
             stance = "Mild Bullish"
             signal = "MOMENTUM ACCUMULATION"
@@ -244,31 +241,26 @@ def analyze_index(index_key):
             "signal": signal
         })
 
-    # Sort constituent results by absolute index point impact (top index movers first)
     constituent_results.sort(key=lambda x: abs(x["point_impact"]), reverse=True)
 
-    # Key Support / Resistance & Progression Ladders (0.1% to 0.5% increments)
-    # E.g. as Pawan Prasad noted: 29425 - 29455 - 29500 - 29560 - 29600
-    base_step = round(current_idx_price * 0.0015, 0) # ~0.15% step
+    # Progression ladder
+    base_step = round(current_idx_price * 0.0015, 0)
     if base_step == 0:
         base_step = 25.0
     
     ladder_levels = []
-    # Build 4 support levels and 4 resistance levels
     for offset in [-4, -3, -2, -1, 0, 1, 2, 3, 4]:
         lvl_price = round(current_idx_price + (offset * base_step), 1)
         pct_diff = round(((lvl_price - current_idx_price) / current_idx_price) * 100, 2)
         
-        # Calculate confirmation condition & probability based on constituent flow
         if offset == 0:
             status = "CURRENT PIVOT"
             conf = "Active Price"
             certainty = 100
         elif offset > 0:
             status = f"RESISTANCE TARGET +{offset}"
-            # Probability driven by net points and bullish weight
             certainty = min(95, max(15, int(45 + (bullish_weight - bearish_weight) * 0.8 - (offset * 8))))
-            conf = f"Needs {constituent_results[0]['symbol']} & {constituent_results[1]['symbol']} to hold > intraday VWAP + volume confirmation"
+            conf = f"Needs {constituent_results[0]['symbol']} & {constituent_results[1]['symbol']} to hold > intraday VWAP + volume surge"
         else:
             status = f"SUPPORT / DIP BUY {abs(offset)}"
             certainty = min(95, max(15, int(50 + (bearish_weight - bullish_weight) * 0.5 - (abs(offset) * 6))))
@@ -282,9 +274,8 @@ def analyze_index(index_key):
             "condition": conf
         })
 
-    # Summary forecast metrics
     market_bias = "BULLISH ACCUMULATION" if (bullish_weight > bearish_weight + 10) else ("BEARISH CONSOLIDATION" if bearish_weight > bullish_weight + 10 else "NEUTRAL / BALANCED CHOP")
-    prob_move_02_pct = min(92, max(25, int(50 + abs(bullish_weight - bearish_weight) * 0.8)))
+    prob_move = min(92, max(25, int(50 + abs(bullish_weight - bearish_weight) * 0.8)))
     expected_direction = "UPWARD (+0.2% to +0.5%)" if bullish_weight > bearish_weight else "DOWNWARD / DIP TEST (-0.2% to -0.5%)"
 
     return {
@@ -301,7 +292,7 @@ def analyze_index(index_key):
         "fiftyTwo_low": round(idx_52_low, 2),
         "bias": market_bias,
         "direction": expected_direction,
-        "certainty": f"{prob_move_02_pct}%",
+        "certainty": f"{prob_move}%",
         "net_point_impact": round(total_net_points_attributed, 2),
         "bullish_weight_pct": round(bullish_weight, 1),
         "bearish_weight_pct": round(bearish_weight, 1),
@@ -314,17 +305,30 @@ def analyze_index(index_key):
 class DashboardHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
-        if parsed.path == "/api/data":
+        if parsed.path.startswith("/api/data"):
             query = urllib.parse.parse_qs(parsed.query)
             idx = query.get("index", ["NASDAQ"])[0]
-            data = analyze_index(idx)
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps(data).encode("utf-8"))
+            try:
+                data = analyze_index(idx)
+                payload = json.dumps(data).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+            except Exception as e:
+                err = json.dumps({"error": str(e)}).encode("utf-8")
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(err)
             return
-        elif parsed.path == "/":
+        elif parsed.path == "/favicon.ico":
+            self.send_response(204)
+            self.end_headers()
+            return
+        elif parsed.path == "/" or parsed.path == "":
             self.path = "/index.html"
             return super().do_GET()
         else:
@@ -332,8 +336,8 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
 def run_server():
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
-    server = HTTPServer(('127.0.0.1', PORT), DashboardHandler)
-    print(f"Index Predictor Dashboard active at http://localhost:{PORT}")
+    server = ThreadingHTTPServer(('0.0.0.0', PORT), DashboardHandler)
+    print(f"Index Predictor Dashboard active on port {PORT}")
     server.serve_forever()
 
 if __name__ == '__main__':
