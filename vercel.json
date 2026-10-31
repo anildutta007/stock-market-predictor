@@ -1,6 +1,10 @@
 {
   "rewrites": [
     {
+      "source": "/api/history",
+      "destination": "/api/data.py"
+    },
+    {
       "source": "/api/data",
       "destination": "/api/data.py"
     }

@@ -1,13 +1,15 @@
 """
 Market Index Predictor & Constituent Attribution Engine
-US & UK Key Indices:
-- NASDAQ 100 (^NDX)
-- S&P 500 (^GSPC)
-- Dow Jones 30 (^DJI)
-- FTSE 100 (^FTSE)
+Supports:
+- Major Indices: NASDAQ 100 (^NDX), S&P 500 (^GSPC), Dow Jones 30 (^DJI), FTSE 100 (^FTSE)
+- 3-Year Historical Readings (Daily, Weekly, Monthly) with Buy & Sell Volume Breakdown
+- Constituent Breakdown: Industry / Sector, Market Cap, % Weight in Index
+- 1% Absolute Number Impact Metric:
+  Formula: Impact of 1% change = Index Price * 0.01 * (Constituent Weight / 100)
 """
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 import json
 import math
 import os
@@ -26,21 +28,26 @@ INDEX_CONFIGS = {
         "currency": "$",
         "ladder_step_pct": 0.15,
         "constituents": [
-            {"symbol": "NVDA", "name": "Nvidia Corp", "weight": 9.40},
-            {"symbol": "AAPL", "name": "Apple Inc", "weight": 8.75},
-            {"symbol": "MSFT", "name": "Microsoft Corp", "weight": 7.95},
-            {"symbol": "AMZN", "name": "Amazon.com Inc", "weight": 5.45},
-            {"symbol": "META", "name": "Meta Platforms", "weight": 4.95},
-            {"symbol": "AVGO", "name": "Broadcom Inc", "weight": 4.60},
-            {"symbol": "GOOGL", "name": "Alphabet Inc A", "weight": 3.10},
-            {"symbol": "GOOG", "name": "Alphabet Inc C", "weight": 2.90},
-            {"symbol": "TSLA", "name": "Tesla Inc", "weight": 2.85},
-            {"symbol": "COST", "name": "Costco Wholesale", "weight": 2.30},
-            {"symbol": "AMD", "name": "Advanced Micro Devices", "weight": 1.95},
-            {"symbol": "NFLX", "name": "Netflix Inc", "weight": 1.85},
-            {"symbol": "ADBE", "name": "Adobe Inc", "weight": 1.45},
-            {"symbol": "QCOM", "name": "Qualcomm Inc", "weight": 1.40},
-            {"symbol": "INTC", "name": "Intel Corp", "weight": 1.15},
+            {"symbol": "NVDA", "name": "NVIDIA Corporation", "industry": "Semiconductors & AI Hardware", "market_cap": "$3.45T", "shares_out": 24500000000, "weight": 9.40},
+            {"symbol": "AAPL", "name": "Apple Inc.", "industry": "Consumer Electronics", "market_cap": "$3.52T", "shares_out": 15110000000, "weight": 8.75},
+            {"symbol": "MSFT", "name": "Microsoft Corporation", "industry": "Enterprise Software & Cloud", "market_cap": "$3.18T", "shares_out": 7430000000, "weight": 7.95},
+            {"symbol": "AMZN", "name": "Amazon.com Inc.", "industry": "E-Commerce & Cloud Computing", "market_cap": "$2.05T", "shares_out": 10520000000, "weight": 5.45},
+            {"symbol": "META", "name": "Meta Platforms Inc.", "industry": "Social Media & AI Services", "market_cap": "$1.52T", "shares_out": 2540000000, "weight": 4.95},
+            {"symbol": "AVGO", "name": "Broadcom Inc.", "industry": "Semiconductors & Infrastructure", "market_cap": "$840B", "shares_out": 4680000000, "weight": 4.60},
+            {"symbol": "GOOGL", "name": "Alphabet Inc. (Class A)", "industry": "Internet Search & Services", "market_cap": "$2.12T", "shares_out": 5890000000, "weight": 3.10},
+            {"symbol": "GOOG", "name": "Alphabet Inc. (Class C)", "industry": "Internet Search & Services", "market_cap": "$2.10T", "shares_out": 5510000000, "weight": 2.90},
+            {"symbol": "TSLA", "name": "Tesla Inc.", "industry": "Automotive & Clean Energy", "market_cap": "$820B", "shares_out": 3210000000, "weight": 2.85},
+            {"symbol": "COST", "name": "Costco Wholesale Corp.", "industry": "Consumer Staples & Retail", "market_cap": "$395B", "shares_out": 443000000, "weight": 2.30},
+            {"symbol": "AMD", "name": "Advanced Micro Devices", "industry": "Semiconductors & Computing", "market_cap": "$260B", "shares_out": 1620000000, "weight": 1.95},
+            {"symbol": "NFLX", "name": "Netflix Inc.", "industry": "Entertainment & Streaming", "market_cap": "$310B", "shares_out": 431000000, "weight": 1.85},
+            {"symbol": "ADBE", "name": "Adobe Inc.", "industry": "Creative & Cloud Software", "market_cap": "$220B", "shares_out": 442000000, "weight": 1.45},
+            {"symbol": "QCOM", "name": "Qualcomm Inc.", "industry": "Wireless & Mobile Chips", "market_cap": "$190B", "shares_out": 1110000000, "weight": 1.40},
+            {"symbol": "INTC", "name": "Intel Corp.", "industry": "Semiconductors & Foundries", "market_cap": "$102B", "shares_out": 4320000000, "weight": 1.15},
+            {"symbol": "PEP", "name": "PepsiCo Inc.", "industry": "Beverages & Snacks", "market_cap": "$235B", "shares_out": 1370000000, "weight": 1.10},
+            {"symbol": "LIN", "name": "Linde PLC", "industry": "Industrial Gases & Chemicals", "market_cap": "$215B", "shares_out": 478000000, "weight": 1.05},
+            {"symbol": "TXN", "name": "Texas Instruments", "industry": "Analog Semiconductors", "market_cap": "$185B", "shares_out": 915000000, "weight": 1.00},
+            {"symbol": "AMGN", "name": "Amgen Inc.", "industry": "Biopharmaceuticals", "market_cap": "$165B", "shares_out": 535000000, "weight": 0.95},
+            {"symbol": "ISRG", "name": "Intuitive Surgical Inc.", "industry": "Robotic Healthcare Devices", "market_cap": "$175B", "shares_out": 355000000, "weight": 0.90}
         ]
     },
     "SP500": {
@@ -49,20 +56,24 @@ INDEX_CONFIGS = {
         "currency": "$",
         "ladder_step_pct": 0.12,
         "constituents": [
-            {"symbol": "MSFT", "name": "Microsoft Corp", "weight": 7.10},
-            {"symbol": "AAPL", "name": "Apple Inc", "weight": 6.90},
-            {"symbol": "NVDA", "name": "Nvidia Corp", "weight": 6.75},
-            {"symbol": "AMZN", "name": "Amazon.com Inc", "weight": 3.80},
-            {"symbol": "META", "name": "Meta Platforms", "weight": 2.65},
-            {"symbol": "GOOGL", "name": "Alphabet Inc A", "weight": 2.20},
-            {"symbol": "BRK-B", "name": "Berkshire Hathaway", "weight": 1.85},
-            {"symbol": "AVGO", "name": "Broadcom Inc", "weight": 1.80},
-            {"symbol": "LLY", "name": "Eli Lilly", "weight": 1.65},
-            {"symbol": "JPM", "name": "JPMorgan Chase", "weight": 1.50},
-            {"symbol": "TSLA", "name": "Tesla Inc", "weight": 1.45},
-            {"symbol": "UNH", "name": "UnitedHealth Group", "weight": 1.30},
-            {"symbol": "XOM", "name": "Exxon Mobil", "weight": 1.15},
-            {"symbol": "V", "name": "Visa Inc", "weight": 1.05},
+            {"symbol": "MSFT", "name": "Microsoft Corporation", "industry": "Enterprise Software & Cloud", "market_cap": "$3.18T", "shares_out": 7430000000, "weight": 7.10},
+            {"symbol": "AAPL", "name": "Apple Inc.", "industry": "Consumer Electronics", "market_cap": "$3.52T", "shares_out": 15110000000, "weight": 6.90},
+            {"symbol": "NVDA", "name": "NVIDIA Corporation", "industry": "Semiconductors & AI Hardware", "market_cap": "$3.45T", "shares_out": 24500000000, "weight": 6.75},
+            {"symbol": "AMZN", "name": "Amazon.com Inc.", "industry": "E-Commerce & Cloud Computing", "market_cap": "$2.05T", "shares_out": 10520000000, "weight": 3.80},
+            {"symbol": "META", "name": "Meta Platforms Inc.", "industry": "Social Media & AI Services", "market_cap": "$1.52T", "shares_out": 2540000000, "weight": 2.65},
+            {"symbol": "GOOGL", "name": "Alphabet Inc. (Class A)", "industry": "Internet Search & Services", "market_cap": "$2.12T", "shares_out": 5890000000, "weight": 2.20},
+            {"symbol": "BRK-B", "name": "Berkshire Hathaway", "industry": "Diversified Financial Holdings", "market_cap": "$990B", "shares_out": 2170000000, "weight": 1.85},
+            {"symbol": "AVGO", "name": "Broadcom Inc.", "industry": "Semiconductors & Infrastructure", "market_cap": "$840B", "shares_out": 4680000000, "weight": 1.80},
+            {"symbol": "LLY", "name": "Eli Lilly and Company", "industry": "Pharmaceuticals & Biotechnology", "market_cap": "$810B", "shares_out": 950000000, "weight": 1.65},
+            {"symbol": "JPM", "name": "JPMorgan Chase & Co.", "industry": "Investment & Retail Banking", "market_cap": "$620B", "shares_out": 2840000000, "weight": 1.50},
+            {"symbol": "TSLA", "name": "Tesla Inc.", "industry": "Automotive & Clean Energy", "market_cap": "$820B", "shares_out": 3210000000, "weight": 1.45},
+            {"symbol": "UNH", "name": "UnitedHealth Group", "industry": "Managed Healthcare & Insurance", "market_cap": "$540B", "shares_out": 920000000, "weight": 1.30},
+            {"symbol": "XOM", "name": "Exxon Mobil Corp.", "industry": "Integrated Oil & Gas", "market_cap": "$480B", "shares_out": 3960000000, "weight": 1.15},
+            {"symbol": "V", "name": "Visa Inc.", "industry": "Digital Payment Processing", "market_cap": "$590B", "shares_out": 1980000000, "weight": 1.05},
+            {"symbol": "PG", "name": "Procter & Gamble Co.", "industry": "Consumer Staples & Goods", "market_cap": "$395B", "shares_out": 2360000000, "weight": 0.95},
+            {"symbol": "JNJ", "name": "Johnson & Johnson", "industry": "Pharmaceuticals & MedTech", "market_cap": "$380B", "shares_out": 2400000000, "weight": 0.90},
+            {"symbol": "HD", "name": "The Home Depot Inc.", "industry": "Home Improvement Retail", "market_cap": "$385B", "shares_out": 990000000, "weight": 0.85},
+            {"symbol": "MA", "name": "Mastercard Inc.", "industry": "Payment Networks & Services", "market_cap": "$470B", "shares_out": 930000000, "weight": 0.80}
         ]
     },
     "DOW": {
@@ -71,19 +82,22 @@ INDEX_CONFIGS = {
         "currency": "$",
         "ladder_step_pct": 0.10,
         "constituents": [
-            {"symbol": "UNH", "name": "UnitedHealth Group", "weight": 8.60},
-            {"symbol": "GS", "name": "Goldman Sachs", "weight": 8.10},
-            {"symbol": "MSFT", "name": "Microsoft Corp", "weight": 6.70},
-            {"symbol": "HD", "name": "Home Depot", "weight": 6.20},
-            {"symbol": "CAT", "name": "Caterpillar Inc", "weight": 5.80},
-            {"symbol": "AMGN", "name": "Amgen Inc", "weight": 4.90},
-            {"symbol": "MCD", "name": "McDonald's Corp", "weight": 4.50},
-            {"symbol": "V", "name": "Visa Inc", "weight": 4.40},
-            {"symbol": "CRM", "name": "Salesforce Inc", "weight": 4.10},
-            {"symbol": "AAPL", "name": "Apple Inc", "weight": 3.70},
-            {"symbol": "BA", "name": "Boeing Co", "weight": 3.10},
-            {"symbol": "JNJ", "name": "Johnson & Johnson", "weight": 2.60},
-            {"symbol": "JPM", "name": "JPMorgan Chase", "weight": 2.50},
+            {"symbol": "UNH", "name": "UnitedHealth Group", "industry": "Managed Healthcare & Insurance", "market_cap": "$540B", "shares_out": 920000000, "weight": 8.60},
+            {"symbol": "GS", "name": "Goldman Sachs Group", "industry": "Investment Banking & Capital Markets", "market_cap": "$175B", "shares_out": 324000000, "weight": 8.10},
+            {"symbol": "MSFT", "name": "Microsoft Corporation", "industry": "Enterprise Software & Cloud", "market_cap": "$3.18T", "shares_out": 7430000000, "weight": 6.70},
+            {"symbol": "HD", "name": "The Home Depot Inc.", "industry": "Home Improvement Retail", "market_cap": "$385B", "shares_out": 990000000, "weight": 6.20},
+            {"symbol": "CAT", "name": "Caterpillar Inc.", "industry": "Heavy Construction Machinery", "market_cap": "$190B", "shares_out": 485000000, "weight": 5.80},
+            {"symbol": "AMGN", "name": "Amgen Inc.", "industry": "Biopharmaceuticals", "market_cap": "$165B", "shares_out": 535000000, "weight": 4.90},
+            {"symbol": "MCD", "name": "McDonald's Corporation", "industry": "Restaurants & Fast Food", "market_cap": "$210B", "shares_out": 718000000, "weight": 4.50},
+            {"symbol": "V", "name": "Visa Inc.", "industry": "Digital Payment Processing", "market_cap": "$590B", "shares_out": 1980000000, "weight": 4.40},
+            {"symbol": "CRM", "name": "Salesforce Inc.", "industry": "Enterprise Cloud CRM Software", "market_cap": "$280B", "shares_out": 965000000, "weight": 4.10},
+            {"symbol": "AAPL", "name": "Apple Inc.", "industry": "Consumer Electronics", "market_cap": "$3.52T", "shares_out": 15110000000, "weight": 3.70},
+            {"symbol": "BA", "name": "The Boeing Company", "industry": "Aerospace & Defense", "market_cap": "$95B", "shares_out": 615000000, "weight": 3.10},
+            {"symbol": "JNJ", "name": "Johnson & Johnson", "industry": "Pharmaceuticals & MedTech", "market_cap": "$380B", "shares_out": 2400000000, "weight": 2.60},
+            {"symbol": "JPM", "name": "JPMorgan Chase & Co.", "industry": "Investment & Retail Banking", "market_cap": "$620B", "shares_out": 2840000000, "weight": 2.50},
+            {"symbol": "IBM", "name": "International Business Machines", "industry": "IT Infrastructure & Hybrid Cloud", "market_cap": "$195B", "shares_out": 920000000, "weight": 2.40},
+            {"symbol": "HON", "name": "Honeywell International", "industry": "Industrial Automation & Aviation", "market_cap": "$135B", "shares_out": 650000000, "weight": 2.30},
+            {"symbol": "DIS", "name": "The Walt Disney Company", "industry": "Entertainment & Theme Parks", "market_cap": "$175B", "shares_out": 1810000000, "weight": 2.10}
         ]
     },
     "FTSE": {
@@ -92,57 +106,59 @@ INDEX_CONFIGS = {
         "currency": "£",
         "ladder_step_pct": 0.12,
         "constituents": [
-            {"symbol": "AZN.L", "name": "AstraZeneca PLC", "weight": 8.90},
-            {"symbol": "SHEL.L", "name": "Shell PLC", "weight": 8.40},
-            {"symbol": "HSBA.L", "name": "HSBC Holdings", "weight": 6.10},
-            {"symbol": "ULVR.L", "name": "Unilever PLC", "weight": 5.20},
-            {"symbol": "BP.L", "name": "BP PLC", "weight": 3.90},
-            {"symbol": "GSK.L", "name": "GSK PLC", "weight": 3.20},
-            {"symbol": "REL.L", "name": "RELX PLC", "weight": 3.10},
-            {"symbol": "RIO.L", "name": "Rio Tinto", "weight": 2.90},
-            {"symbol": "DGE.L", "name": "Diageo PLC", "weight": 2.80},
-            {"symbol": "BATS.L", "name": "British American Tobacco", "weight": 2.60},
-            {"symbol": "GLEN.L", "name": "Glencore PLC", "weight": 2.40},
-            {"symbol": "LSEG.L", "name": "London Stock Exchange Group", "weight": 2.10},
+            {"symbol": "AZN.L", "name": "AstraZeneca PLC", "industry": "Pharmaceuticals & Oncology", "market_cap": "£185B", "shares_out": 1550000000, "weight": 8.90},
+            {"symbol": "SHEL.L", "name": "Shell PLC", "industry": "Integrated Energy & LNG", "market_cap": "£165B", "shares_out": 6250000000, "weight": 8.40},
+            {"symbol": "HSBA.L", "name": "HSBC Holdings PLC", "industry": "Global Retail & Commercial Banking", "market_cap": "£130B", "shares_out": 18500000000, "weight": 6.10},
+            {"symbol": "ULVR.L", "name": "Unilever PLC", "industry": "Consumer Staples & Personal Care", "market_cap": "£115B", "shares_out": 2490000000, "weight": 5.20},
+            {"symbol": "BP.L", "name": "BP PLC", "industry": "Oil, Gas & Renewable Energy", "market_cap": "£68B", "shares_out": 16100000000, "weight": 3.90},
+            {"symbol": "GSK.L", "name": "GSK PLC", "industry": "Vaccines & Pharmaceuticals", "market_cap": "£59B", "shares_out": 4120000000, "weight": 3.20},
+            {"symbol": "REL.L", "name": "RELX PLC", "industry": "Analytics & Information Systems", "market_cap": "£66B", "shares_out": 1880000000, "weight": 3.10},
+            {"symbol": "RIO.L", "name": "Rio Tinto Group", "industry": "Mining & Iron Ore Extraction", "market_cap": "£62B", "shares_out": 1250000000, "weight": 2.90},
+            {"symbol": "DGE.L", "name": "Diageo PLC", "industry": "Beverages & Distilleries", "market_cap": "£56B", "shares_out": 2230000000, "weight": 2.80},
+            {"symbol": "BATS.L", "name": "British American Tobacco", "industry": "Tobacco & Inhalation Products", "market_cap": "£58B", "shares_out": 2210000000, "weight": 2.60},
+            {"symbol": "GLEN.L", "name": "Glencore PLC", "industry": "Natural Resources & Commodity Trading", "market_cap": "£48B", "shares_out": 12200000000, "weight": 2.40},
+            {"symbol": "LSEG.L", "name": "London Stock Exchange Group", "industry": "Financial Market Infrastructure", "market_cap": "£52B", "shares_out": 535000000, "weight": 2.10},
+            {"symbol": "BARC.L", "name": "Barclays PLC", "industry": "Banking & Financial Services", "market_cap": "£36B", "shares_out": 14900000000, "weight": 1.95},
+            {"symbol": "LLOY.L", "name": "Lloyds Banking Group", "industry": "Commercial & Mortgage Banking", "market_cap": "£35B", "shares_out": 62800000000, "weight": 1.85},
+            {"symbol": "VOD.L", "name": "Vodafone Group PLC", "industry": "Telecommunications", "market_cap": "£19B", "shares_out": 26800000000, "weight": 1.20}
         ]
     }
 }
 
 CACHE = {}
 CACHE_LOCK = threading.Lock()
-CACHE_TTL = 10  # 10s caching for ultra-responsive UI
+CACHE_TTL = 15
 
-def fetch_chart(symbol):
+def fetch_chart(symbol, interval="1d", range_param="5d"):
+    cache_key = f"{symbol}:{interval}:{range_param}"
     with CACHE_LOCK:
-        if symbol in CACHE:
-            entry = CACHE[symbol]
+        if cache_key in CACHE:
+            entry = CACHE[cache_key]
             if time.time() - entry["ts"] < CACHE_TTL:
                 return entry["data"]
 
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(symbol)}?interval=1d&range=5d"
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(symbol)}?interval={interval}&range={range_param}"
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'
     }
     req = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=3.5) as response:
+        with urllib.request.urlopen(req, timeout=4.5) as response:
             data = json.loads(response.read().decode('utf-8'))
             res = data['chart']['result'][0]
             with CACHE_LOCK:
-                CACHE[symbol] = {"ts": time.time(), "data": res}
+                CACHE[cache_key] = {"ts": time.time(), "data": res}
             return res
     except Exception:
-        # Check if we have stale cached data
         with CACHE_LOCK:
-            if symbol in CACHE:
-                return CACHE[symbol]["data"]
+            if cache_key in CACHE:
+                return CACHE[cache_key]["data"]
         return None
 
 def analyze_index(index_key):
     cfg = INDEX_CONFIGS.get(index_key, INDEX_CONFIGS["NASDAQ"])
     
-    # 1. Fetch index data
-    idx_raw = fetch_chart(cfg["symbol"])
+    idx_raw = fetch_chart(cfg["symbol"], interval="1d", range_param="5d")
     idx_meta = idx_raw.get('meta', {}) if idx_raw else {}
 
     current_idx_price = idx_meta.get('regularMarketPrice') or idx_meta.get('previousClose') or 29400.0
@@ -154,11 +170,10 @@ def analyze_index(index_key):
     idx_chg_pts = current_idx_price - prev_close
     idx_chg_pct = (idx_chg_pts / prev_close) * 100 if prev_close else 0.0
 
-    # 2. Parallel fetch constituents
     symbols = [c["symbol"] for c in cfg["constituents"]]
     raw_dict = {}
     with ThreadPoolExecutor(max_workers=8) as executor:
-        futures = {executor.submit(fetch_chart, sym): sym for sym in symbols}
+        futures = {executor.submit(fetch_chart, sym, "1d", "5d"): sym for sym in symbols}
         for future in futures:
             sym = futures[future]
             try:
@@ -198,6 +213,10 @@ def analyze_index(index_key):
         point_impact = (weight / 100.0) * (pct_change / 100.0) * current_idx_price
         total_net_points_attributed += point_impact
 
+        # 1% change absolute impact indicator on index
+        # When this stock moves +/-1.00%, the index moves by: 0.01 * (weight / 100) * current_idx_price
+        one_pct_impact = (weight / 100.0) * 0.01 * current_idx_price
+
         # Day Range position (0 to 100)
         prev_range_span = (stock_day_high - stock_day_low) if stock_day_high > stock_day_low else (curr_price * 0.01)
         range_pos = max(0.0, min(1.0, (curr_price - stock_day_low) / prev_range_span)) if prev_range_span > 0 else 0.5
@@ -226,6 +245,8 @@ def analyze_index(index_key):
         constituent_results.append({
             "symbol": sym,
             "name": c["name"],
+            "industry": c.get("industry", "Technology"),
+            "market_cap": c.get("market_cap", "$100B"),
             "weight": round(weight, 2),
             "price": round(curr_price, 2),
             "prev_close": round(stock_prev_close, 2),
@@ -235,6 +256,7 @@ def analyze_index(index_key):
             "fiftyTwo_high": round(stock_52_high, 2),
             "fiftyTwo_low": round(stock_52_low, 2),
             "point_impact": round(point_impact, 2),
+            "one_pct_impact": round(one_pct_impact, 2),
             "range_pos": round(range_pos * 100, 1),
             "pos_52": round(pos_52 * 100, 1),
             "stance": stance,
@@ -243,7 +265,6 @@ def analyze_index(index_key):
 
     constituent_results.sort(key=lambda x: abs(x["point_impact"]), reverse=True)
 
-    # Progression ladder
     base_step = round(current_idx_price * 0.0015, 0)
     if base_step == 0:
         base_step = 25.0
@@ -302,6 +323,88 @@ def analyze_index(index_key):
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
     }
 
+def fetch_history_3y(symbol, frequency="daily"):
+    """
+    Fetch 3-year historical readings with calculated buy & sell volume estimations.
+    frequency: 'daily' (interval 1d), 'weekly' (interval 1wk), 'monthly' (interval 1mo)
+    """
+    interval_map = {
+        "daily": "1d",
+        "weekly": "1wk",
+        "monthly": "1mo"
+    }
+    interval = interval_map.get(frequency, "1d")
+    raw = fetch_chart(symbol, interval=interval, range_param="3y")
+    if not raw or 'timestamp' not in raw:
+        return []
+
+    timestamps = raw.get('timestamp', [])
+    indicators = raw.get('indicators', {})
+    quotes = indicators.get('quote', [{}])[0]
+
+    opens = quotes.get('open', [])
+    highs = quotes.get('high', [])
+    lows = quotes.get('low', [])
+    closes = quotes.get('close', [])
+    volumes = quotes.get('volume', [])
+
+    records = []
+    n = len(timestamps)
+
+    for i in range(n):
+        c = closes[i] if i < len(closes) else None
+        o = opens[i] if i < len(opens) else None
+        h = highs[i] if i < len(highs) else None
+        l = lows[i] if i < len(lows) else None
+        v = volumes[i] if i < len(volumes) else None
+
+        if c is None or o is None or h is None or l is None or v is None:
+            continue
+
+        ts = timestamps[i]
+        date_str = datetime.utcfromtimestamp(ts).strftime('%Y-%m-%d')
+        
+        # Period change
+        chg_pts = c - o
+        chg_pct = (chg_pts / o * 100) if o else 0.0
+
+        # High-Low Range
+        hl_range = h - l if h > l else (c * 0.01)
+        
+        # Buy/Sell Volume estimation using intraday location and candle direction
+        # Williams / Tick Volume proxy:
+        # If Close > Open, buying pressure dominated: buy_ratio = 0.5 + 0.5 * ((Close - Open) / (High - Low))
+        # If Close < Open, selling pressure dominated: sell_ratio = 0.5 + 0.5 * ((Open - Close) / (High - Low))
+        direction_ratio = (c - o) / hl_range if hl_range > 0 else 0.0
+        # Clamp direction ratio between -0.8 and +0.8
+        direction_ratio = max(-0.8, min(0.8, direction_ratio))
+        
+        buy_pct = 0.50 + (0.45 * direction_ratio)
+        buy_pct = max(0.05, min(0.95, buy_pct))
+        sell_pct = 1.0 - buy_pct
+
+        buy_vol = int(v * buy_pct)
+        sell_vol = int(v * sell_pct)
+
+        records.append({
+            "date": date_str,
+            "open": round(o, 2),
+            "high": round(h, 2),
+            "low": round(l, 2),
+            "close": round(c, 2),
+            "volume": int(v),
+            "buy_volume": buy_vol,
+            "sell_volume": sell_vol,
+            "buy_pct": round(buy_pct * 100, 1),
+            "sell_pct": round(sell_pct * 100, 1),
+            "chg_pts": round(chg_pts, 2),
+            "chg_pct": round(chg_pct, 2)
+        })
+
+    # Return newest readings first
+    records.reverse()
+    return records
+
 class DashboardHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -324,6 +427,37 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(err)
             return
+
+        elif parsed.path.startswith("/api/history"):
+            query = urllib.parse.parse_qs(parsed.query)
+            idx = query.get("index", ["NASDAQ"])[0]
+            freq = query.get("frequency", ["daily"])[0]
+            cfg = INDEX_CONFIGS.get(idx, INDEX_CONFIGS["NASDAQ"])
+            try:
+                records = fetch_history_3y(cfg["symbol"], frequency=freq)
+                res = {
+                    "index_name": cfg["name"],
+                    "index_symbol": cfg["symbol"],
+                    "currency": cfg["currency"],
+                    "frequency": freq,
+                    "count": len(records),
+                    "readings": records
+                }
+                payload = json.dumps(res).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+            except Exception as e:
+                err = json.dumps({"error": str(e)}).encode("utf-8")
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(err)
+            return
+
         elif parsed.path == "/favicon.ico":
             self.send_response(204)
             self.end_headers()
