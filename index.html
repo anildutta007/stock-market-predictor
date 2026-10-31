@@ -600,13 +600,13 @@
     <div class="panel-header">
       <div>
         <div class="panel-title">
-          <span>📊 Full Constituent Breakdown: Industry, Market Cap, Weight % & 1% Impact</span>
+          <span>📊 Full Constituent Breakdown: Ordered by Market Value (Descending)</span>
         </div>
         <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
-          Includes actual stocks comprising the index, industry classification, market capital, exact % weight, and absolute index point impact of a ±1% change.
+          Includes actual stocks comprising the index ranked from highest to lowest market capitalization, industry classification, exact % weight, and absolute index point impact of a ±1% change.
         </div>
       </div>
-      <span class="status-text" id="constituentCount">Ranked by absolute point contribution</span>
+      <span class="status-text" id="constituentCount">Ranked by market value (highest first)</span>
     </div>
 
     <div class="table-container">
@@ -749,7 +749,11 @@
       // Constituents Table
       const cBody = document.getElementById('constituentBody');
       cBody.innerHTML = '';
-      document.getElementById('constituentCount').innerText = `${data.constituents.length} key constituents loaded • Base Index: ${currency}${data.price.toLocaleString()}`;
+      
+      // Ensure sorted by market value (market_cap_raw) in descending order
+      data.constituents.sort((a, b) => (b.market_cap_raw || 0) - (a.market_cap_raw || 0));
+
+      document.getElementById('constituentCount').innerText = `${data.constituents.length} key constituents loaded • Ordered by Market Value (High to Low)`;
 
       data.constituents.forEach(c => {
         const tr = document.createElement('tr');

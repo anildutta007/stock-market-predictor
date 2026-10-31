@@ -242,11 +242,22 @@ def analyze_index(index_key):
             signal = "RANGE BOUND"
             neutral_weight += weight
 
+        # Calculate real-time market value / market cap
+        shares = c.get("shares_out", 1000000000)
+        market_val_raw = curr_price * shares
+        if market_val_raw >= 1e12:
+            formatted_mcap = f"{cfg['currency']}{market_val_raw / 1e12:.2f}T"
+        elif market_val_raw >= 1e9:
+            formatted_mcap = f"{cfg['currency']}{market_val_raw / 1e9:.2f}B"
+        else:
+            formatted_mcap = f"{cfg['currency']}{market_val_raw / 1e6:.2f}M"
+
         constituent_results.append({
             "symbol": sym,
             "name": c["name"],
             "industry": c.get("industry", "Technology"),
-            "market_cap": c.get("market_cap", "$100B"),
+            "market_cap": formatted_mcap,
+            "market_cap_raw": market_val_raw,
             "weight": round(weight, 2),
             "price": round(curr_price, 2),
             "prev_close": round(stock_prev_close, 2),
@@ -263,7 +274,8 @@ def analyze_index(index_key):
             "signal": signal
         })
 
-    constituent_results.sort(key=lambda x: abs(x["point_impact"]), reverse=True)
+    # Order actual shares in descending order of market value (market capitalization)
+    constituent_results.sort(key=lambda x: x["market_cap_raw"], reverse=True)
 
     base_step = round(current_idx_price * 0.0015, 0)
     if base_step == 0:
