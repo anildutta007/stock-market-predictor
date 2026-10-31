@@ -233,7 +233,13 @@ def analyze_index(index_key):
 
         # Calculate real-time market value / market cap
         shares = c.get("shares_out", 1000000000)
-        market_val_raw = curr_price * shares
+        
+        # Handle London Stock Exchange pence quote (GBp) -> convert pence to pounds (£)
+        # All UK equities on LSE trade in pence (GBp)
+        is_lse_pence = sym.endswith(".L")
+        actual_price_in_currency = (curr_price / 100.0) if is_lse_pence else curr_price
+
+        market_val_raw = actual_price_in_currency * shares
         if market_val_raw >= 1e12:
             formatted_mcap = f"{cfg['currency']}{market_val_raw / 1e12:.2f}T"
         elif market_val_raw >= 1e9:
